@@ -117,6 +117,7 @@ def load_graph_data(dataset_name, show_details=False):
     return feat, label, torch.tensor(adj).float(), node_num, cluster_num
 
 
+'''归一化邻接矩阵'''
 def normalize_adj(adj, self_loop=True, symmetry=False):
     """
     normalize the adj matrix

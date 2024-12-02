@@ -57,7 +57,7 @@ def cluster_acc(y_true, y_pred):
     return acc, f1_macro
 
 
-def phi(y_true, y_pred, show_details=True):
+def eva(y_true, y_pred, show_details=True):
     """
     evaluate the clustering performance
     Args:
@@ -117,7 +117,6 @@ def load_graph_data(dataset_name, show_details=False):
     return feat, label, torch.tensor(adj).float(), node_num, cluster_num
 
 
-'''归一化邻接矩阵'''
 def normalize_adj(adj, self_loop=True, symmetry=False):
     """
     normalize the adj matrix
@@ -164,9 +163,9 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def eva(feature, true_labels, cluster_num):
+def phi(feature, true_labels, cluster_num):
     predict_labels, centers = kmeans(X=feature, num_clusters=cluster_num, distance="euclidean", device="cuda")
-    acc, nmi, ari, f1 = phi(true_labels, predict_labels.numpy(), show_details=False)
+    acc, nmi, ari, f1 = eva(true_labels, predict_labels.numpy(), show_details=False)
     return 100 * acc, 100 * nmi, 100 * ari, 100 * f1, predict_labels.numpy(), centers
 
 
@@ -192,12 +191,15 @@ def comprehensive_similarity(Z1, Z2, E1, E2, alpha):
 
 
 def hard_sample_aware_infoNCE(S, M, pos_neg_weight, pos_weight, node_num):
-    # 计算所有节点对的权重
+    """
+    S：相似度矩阵
+    M：动态权重矩阵
+
+    """
+    # 加权的正负样本对
     pos_neg = M * torch.exp(S * pos_neg_weight)
     pos = torch.cat([torch.diag(S, node_num), torch.diag(S, -node_num)], dim=0)
-    # 计算正样本的权重
     pos = torch.exp(pos * pos_weight)
-    # 计算负样本的权重
     neg = (torch.sum(pos_neg, dim=1) - pos)
     infoNEC = (-torch.log(pos / (pos + neg))).sum() / (2 * node_num)
     return infoNEC
@@ -212,39 +214,24 @@ def square_euclid_distance(Z, center):
     return distance
 
 
-def high_confidence_sample(Z, center):
-    # 输出距离中心点的距离矩阵并转换成概率分布
+def high_confidence(Z, center):
     distance_norm = torch.min(F.softmax(square_euclid_distance(Z, center), dim=1), dim=1).values
-    # 获取小于置信度tao的样本集
     value, _ = torch.topk(distance_norm, int(Z.shape[0] * (1 - args.tao)))
-    # 创建高置信度样本集的掩码
     index = torch.where(distance_norm <= value[-1],
                                 torch.ones_like(distance_norm), torch.zeros_like(distance_norm))
-    # print(f'index.shape:{index.shape}')
-    # 提取高置信度样本集的索引
-    high_conf_index_v1 = torch.nonzero(index).reshape(-1, ) #torch.Size([2708])
-    # print(f'high_conf_index_v1.shape:{high_conf_index_v1.shape}')
-    # 增加偏移量Z.shape[0] ，因为有两个视图，矩阵为[2n,2n]
-    high_conf_index_v2 = high_conf_index_v1 + Z.shape[0]  #torch.Size([2708])
-    # print(f'high_conf_index_v2.shape:{high_conf_index_v2.shape}')
-    # 索引数组，一维
+
+    high_conf_index_v1 = torch.nonzero(index).reshape(-1, )
+    high_conf_index_v2 = high_conf_index_v1 + Z.shape[0]
     H = torch.cat([high_conf_index_v1, high_conf_index_v2], dim=0)
-    # 选取特定行和列的组合来创建布尔索引数组
     H_mat = np.ix_(H.cpu(), H.cpu())
     return H, H_mat
 
 
 def pseudo_matrix(P, S, node_num):
     P = torch.tensor(P)
-    # 行拼接
     P = torch.cat([P, P], dim=0)
-    # print(f'P.shape:{P.shape}') # torch.Size([5416])
-    # 伪标签相同=1，不同=0
     Q = (P == P.unsqueeze(1)).float().to(args.device)
-    # print(f'Q.shape:{Q.shape}') # torch.Size([5416, 5416])
     S_norm = (S - S.min()) / (S.max() - S.min())
-    # 计算高置信度样本对的动态权重，（不在高置信度样本集中的样本对权重得到1。
     M_mat = torch.abs(Q - S_norm) ** args.beta
-    # 两个对角线元素拼接，得到（不同视图的相同节点）对应的权重
     M = torch.cat([torch.diag(M_mat, node_num), torch.diag(M_mat, -node_num)], dim=0)
     return M, M_mat
